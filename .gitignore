@@ -5,3 +5,4 @@ tests/
 *.pickle
 *.hdf5
 *.csv
+data/
