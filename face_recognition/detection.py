@@ -2,155 +2,177 @@ import os
 import numpy as np
 from skimage.io import imread
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import (Conv2D, MaxPooling2D, Flatten, Dense, Dropout, Activation, BatchNormalization, Reshape)
+import pandas as pd
+from tensorflow import keras
+from tensorflow.keras.layers import LeakyReLU
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import Activation, Convolution2D, MaxPooling2D, BatchNormalization, Flatten, Dense, Dropout, Conv2D,MaxPool2D, ZeroPadding2D
 from skimage.transform import resize, rotate
 from skimage.color import rgb2gray
+from sklearn.model_selection import train_test_split
 
 
 IMG_SIZE = 100
-EPOCHS = 300
-BATCHES = 256
+EPOCHS = 80
+BATCHES = 128
 
-
-def flip_img(img, pnts):
-    new_pnts = np.copy(pnts)
-    new_pnts[:, 0] = -pnts[:, 0] + np.shape(img)[1] - 1
-    new_pnts[0], new_pnts[3] = new_pnts[3], new_pnts[0]
-    new_pnts[1], new_pnts[2] = new_pnts[2], new_pnts[1]
-    new_pnts[4], new_pnts[9] = new_pnts[9], new_pnts[4]
-    new_pnts[5], new_pnts[8] = new_pnts[8], new_pnts[5]
-    new_pnts[6], new_pnts[7] = new_pnts[7], new_pnts[6]
-    new_pnts[11], new_pnts[13] = new_pnts[13], new_pnts[11]
-    return (np.fliplr(img), new_pnts)
-
-def random_rotate(img, pnts):
-    angle = np.random.randint(-30, 30)
-    rotation_matrix = [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
-    center = np.shape(img)[0] / 2 - 0.5
-    new_pnts = np.matrix.transpose(np.matmul(rotation_matrix, np.matrix.transpose(pnts - center))) +  center
-    return (rotate(img, angle), new_pnts)
-
-def resize_img(img, pnts, ret_reverse=False):
-    new_img = resize(img, [IMG_SIZE, IMG_SIZE])
-    if pnts is not None:
-        new_pnts = pnts * IMG_SIZE / np.shape(img)[0]
-    else:
-        new_pnts = None
-    if ret_reverse:
-        return (new_img, new_pnts, np.shape(img)[0] / IMG_SIZE)
-    else:
-        return (new_img, new_pnts)
-
-def random_crop(img, pnts):
-    crop = (int)((np.random.randint(0, 30) / 1000.0) * IMG_SIZE)
-    return resize_img(img[crop:IMG_SIZE - crop:, crop:IMG_SIZE - crop:], pnts - crop, False)
-
-def normalize_img(img):
-    avg = np.mean(img, axis=0)
-    disp = np.sqrt(np.var(img, axis=0))
-    return np.array((img - avg) / disp).reshape(-1, IMG_SIZE, IMG_SIZE, 1)
-
-def get_train_data(img_train, dir, fast_train=False):
+def get_data(data_dir, index, size=(IMG_SIZE, IMG_SIZE, 1), fast_train=True):
+    gt = pd.DataFrame(index).transpose()
+    files = sorted(os.listdir(data_dir))
+    images = []
+    pnts = []
     if fast_train:
-        len_train = 3
+        n_files = 3
     else:
-        len_train = len(img_train) * 7
-    X = np.zeros((len_train, IMG_SIZE, IMG_SIZE))
-    y = np.zeros((len_train, 14, 2))
-    i = 0
-    for filename in img_train:
-        #if i % 700 == 0:
-          #print(i)
-        pnts = img_train[filename]
-        img = rgb2gray(imread(os.path.join(dir, filename)))
-        new_pnts = np.dstack((pnts[::2], pnts[1::2]))[0]
-        img, new_pnts = resize_img(img, new_pnts, False)
-        X[i] = img
-        y[i] = new_pnts
-        if fast_train:
-            i += 1
-            if i == len_train:
-                break
-        else:
-            X[i + 6], y[i + 6] = random_crop(img, new_pnts)
-            X[i + 5], y[i + 5] = flip_img(img, new_pnts)
-            for j in range(4):
-                X[i + j + 1], y[i + j + 1] = random_rotate(img, new_pnts)
-            i += 7
-    return normalize_img(X), y
+        n_files = len(files)
+    for i in range(n_files):
+        img = imread(data_dir+'/'+files[i])
+        x, y = img.shape[0], img.shape[1]
+        img = resize(rgb2gray(img), size, mode='constant')
+        cur_pnts = gt.iloc[i, :].values
+        xs = cur_pnts[::2].astype('float')
+        ys = cur_pnts[1::2].astype('float')
+        xs = np.rint(xs / x * size[0])
+        ys = np.rint(ys / y * size[1])
+        cur_pnts[::2] = xs
+        cur_pnts[1::2] = ys
+        pnts.append(cur_pnts)
+        images.append(img)
+    images = np.array(images, dtype='float')
+    pnts = np.array(pnts)
+    return images, pnts
 
+def flip_img(img, cur_pnts):
+    new_img = np.zeros((IMG_SIZE, IMG_SIZE, 1))
+    new_img[:, :, 0] = np.fliplr(img[:, :, 0])
+    xs = IMG_SIZE - cur_pnts[::2]
+    ys = cur_pnts[1::2]
+    new_pnts = np.zeros(np.shape(cur_pnts))
+    new_pnts[0] = xs[3]
+    new_pnts[1] = ys[3]
+    new_pnts[2] = xs[2]
+    new_pnts[3] = ys[2]
+    new_pnts[4] = xs[1]
+    new_pnts[5] = ys[1]
+    new_pnts[6] = xs[0]
+    new_pnts[7] = ys[0]
+    new_pnts[8] = xs[9]
+    new_pnts[9] = ys[9]
+    new_pnts[10] = xs[8]
+    new_pnts[11] = ys[8]
+    new_pnts[12] = xs[7]
+    new_pnts[13] = ys[7]
+    new_pnts[14] = xs[6]
+    new_pnts[15] = ys[6]
+    new_pnts[16] = xs[5]
+    new_pnts[17] = ys[5]
+    new_pnts[18] = xs[4]
+    new_pnts[19] = ys[4]
+    new_pnts[20] = xs[10]
+    new_pnts[21] = ys[10]
+    new_pnts[22] = xs[13]
+    new_pnts[23] = ys[13]
+    new_pnts[24] = xs[12]
+    new_pnts[25] = ys[12]
+    new_pnts[26] = xs[11]
+    new_pnts[27] = ys[11]
+    return new_img, new_pnts
 
-def get_test_data(dir):
-    filenames = os.listdir(dir)
-    len_test = len(filenames)
-    X = np.zeros((len_test, IMG_SIZE, IMG_SIZE))
-    transforms = np.zeros(len_test)
-    for i in range(len(filenames)):
-        filename = filenames[i]
-        img = rgb2gray(imread(os.path.join(dir, filename)))
-        img, tmp, transform = resize_img(img, None, True)
-        X[i] = img
-        transforms[i] = transform
-    return normalize_img(X), filenames, transforms
+def rotate_img(image, pnts, angle):
+    phi = angle * np.pi / 180
+    rotation_matrix = np.array([[np.cos(phi), np.sin(phi)], [-np.sin(phi), np.cos(phi)]])
+    new_pnts = np.array(pnts.reshape(14, 2))
+    img = rotate(image, angle, center=(0,0), resize=False, mode='constant', order=1)
+    for i in range(14):
+      new_pnts[i] = np.dot(rotation_matrix, new_pnts[i].T)
+    return img, new_pnts.flatten()
 
+def data_augmentation(X, y):
+    X_new, y_new = np.zeros(np.shape(X)), np.zeros(np.shape(y))
+    n_imgs = X.shape[0]
+    for i in range(n_imgs):
+        X_tmp, y_tmp = flip_img(X[i], y[i])
+        X_new[i] = X_tmp
+        y_new[i] = y_tmp
+    X_aug = np.vstack((X, X_new))
+    y_aug = np.vstack((y, y_new))
+    n_imgs = X_aug.shape[0]
+    X_new, y_new = np.zeros((n_imgs, 100, 100, 1)), np.zeros((n_imgs, 28))
+    for i in range(n_imgs):
+      X_tmp, y_tmp = rotate_img(X_aug[i], y_aug[i], -15)
+      X_new[i] = X_tmp
+      y_new[i] = y_tmp
+    X_aug = np.vstack((X_aug, X_new))
+    y_aug = np.vstack((y_aug, y_new))
+    print(X_aug.shape, y_aug.shape)
+    return X_aug, y_aug
 
-def build_clf():
-    clf = Sequential()
+def get_model():
+    model = Sequential()
+    model.add(Convolution2D(32, (3,3), padding='same', use_bias=False, input_shape=(100,100,1)))
+    model.add(LeakyReLU(alpha = 0.1))
+    model.add(BatchNormalization())
+    model.add(MaxPool2D(pool_size=(2, 2)))
+    model.add(Convolution2D(64, (3,3), padding='same', use_bias=False))
+    model.add(LeakyReLU(alpha = 0.1))
+    model.add(BatchNormalization())
+    model.add(MaxPool2D(pool_size=(2, 2)))
+    model.add(Convolution2D(96, (3,3), padding='same', use_bias=False))
+    model.add(LeakyReLU(alpha = 0.1))
+    model.add(BatchNormalization())
+    model.add(MaxPool2D(pool_size=(2, 2)))
+    model.add(Convolution2D(128, (3,3),padding='same', use_bias=False))
+    model.add(LeakyReLU(alpha = 0.1))
+    model.add(BatchNormalization())
+    model.add(MaxPool2D(pool_size=(2, 2)))
+    model.add(Convolution2D(256, (3,3),padding='same',use_bias=False))
+    model.add(LeakyReLU(alpha = 0.1))
+    model.add(BatchNormalization())
+    model.add(MaxPool2D(pool_size=(2, 2)))
+    model.add(Convolution2D(512, (3,3), padding='same', use_bias=False))
+    model.add(LeakyReLU(alpha = 0.1))
+    model.add(BatchNormalization())
+    model.add(Flatten())
+    model.add(Dense(512,activation='relu'))
+    model.add(Dropout(0.1))
+    model.add(Dense(28))
+    return model
 
-    clf.add(Conv2D(32, (4, 4), padding='valid', kernel_initializer='random_uniform', input_shape=(IMG_SIZE, IMG_SIZE, 1)))
-    clf.add(Activation('elu'))
-    clf.add(MaxPooling2D((2, 2)))
-    clf.add(Dropout(0.1))
-
-    clf.add(Conv2D(64, (3, 3), padding='valid', kernel_initializer='random_uniform'))
-    clf.add(Activation('elu'))
-    clf.add(MaxPooling2D((2, 2)))
-    clf.add(Dropout(0.2))
-
-    clf.add(Conv2D(128, (2, 2), padding='valid', kernel_initializer='random_uniform'))
-    clf.add(Activation('elu'))
-    clf.add(MaxPooling2D((2, 2)))
-    clf.add(Dropout(0.3))
-
-    clf.add(Conv2D(256, (1, 1), padding='valid', kernel_initializer='random_uniform'))
-    clf.add(Activation('elu'))
-    clf.add(MaxPooling2D((2, 2)))
-    clf.add(Dropout(0.4))
-
-    clf.add(Flatten())
-
-    clf.add(Dense(1000))
-    clf.add(Activation('elu'))
-    clf.add(Dropout(0.5))
-    clf.add(Dense(1000))
-    clf.add(Activation('linear'))
-    clf.add(Dropout(0.6))
-    clf.add(Dense(14 * 2))
-    clf.add(Reshape((14, 2)))
-
-    clf.compile(optimizer='adam', loss='mse', metrics=['accuracy'])
-    return clf
 
 def train_detector(train_gt, train_img_dir, fast_train=True):
-    #print(tf.test.is_gpu_available())
+    X, y = get_data(train_img_dir, train_gt, fast_train=fast_train)
+    model = get_model()
+    model.compile(optimizer = 'adam', loss = 'mse')
+    reductor = keras.callbacks.ReduceLROnPlateau(monitor = 'val_loss', factor = 0.5, patience = 5, verbose = 1)
     if fast_train:
         batches = 2
         epochs = 1
+        model.fit(X.astype('float'), y.astype('float'), batch_size=batches, shuffle=True, epochs=epochs, callbacks=[reductor])
     else:
         batches = BATCHES
         epochs = EPOCHS
-    X_train, y_train = get_train_data(train_gt, train_img_dir, fast_train)
-    #print("got_train_data")
-    clf = build_clf()
-    clf.fit(X_train, y_train, batch_size=batches, epochs=epochs, validation_split=0.15)
-    #clf.save('/content/drive/My Drive/Colab Notebooks/face_recognition/facepoints_model.hdf5')
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, random_state=42)
+        X_train, y_train = data_augmentation(X_train, y_train)
+        X_val, y_val = data_augmentation(X_val, y_val)
+        X_train = (X_train - np.mean(X_train)) / np.std(X_train)
+        X_val = (X_val - np.mean(X_val)) / np.std(X_val)
+        model.fit(X_train.astype('float'), y_train.astype('float'), batch_size=batches, shuffle=True, epochs=epochs, validation_data=(X_val.astype('float'), y_val.astype('float')), callbacks=[reductor])
+    #model.save('facepoints_model.hdf5')
+
+def get_test_data(data_dir, size=(IMG_SIZE, IMG_SIZE, 1)):
+    files = sorted(os.listdir(data_dir))
+    images = []
+    for i in range(len(files)):
+        img = imread(data_dir+'/'+files[i])
+        img = resize(rgb2gray(img), size, mode='constant')
+        images.append(img)
+    images = np.array(images, dtype='float')
+    return images, files
 
 def detect(clf, test_img_dir):
-    X_test, filenames, reverse_transforms = get_test_data(test_img_dir)
+    X_test, filenames = get_test_data(test_img_dir)
     y_pred = clf.predict(X_test)
     ans = {}
     for i in range(len(y_pred)):
-        y_pred[i] *= reverse_transforms[i]
         ans[filenames[i]] = np.array(y_pred[i]).flatten().tolist()
     return ans

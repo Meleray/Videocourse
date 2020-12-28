@@ -114,15 +114,14 @@ def run_single_test(data_dir, output_dir):
     from keras import backend as K
     from keras.models import load_model
     from os.path import abspath, dirname, join
-
     train_dir = join(data_dir, 'train')
     test_dir = join(data_dir, 'test')
 
     train_gt = read_csv(join(train_dir, 'gt.csv'))
     train_img_dir = join(train_dir, 'images')
 
-    model = train_detector(train_gt, train_img_dir, fast_train=False)
-
+    model = train_detector(train_gt, train_img_dir, fast_train=True)
+    
     code_dir = dirname(abspath(__file__))
     model = load_model(join(code_dir, 'facepoints_model.hdf5'))
     test_img_dir = join(test_dir, 'images')
